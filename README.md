@@ -1,10 +1,17 @@
 # Minimal CI/CD Sample
 
-Demonstrates a GitHub Actions CI/CD pipeline that validates Terraform and Helm against a real GCP project — no Apigee org or Kubernetes cluster required. Authentication uses **Workload Identity Federation** (keyless — no SA JSON keys).
+A minimal, self-contained GitHub Actions pipeline that validates Terraform and Helm against a real GCP project — no Apigee org or Kubernetes cluster required.
+
+**What the pipeline validates on every push:**
+- GCP authentication via SA key (proves credentials work end-to-end)
+- `terraform init` + `plan` (validates provider config and GCP API access)
+- `helm template` (validates chart rendering, no cluster needed)
+- Structural checks via `scripts/check.py` (optional Apigee API probe, skips gracefully)
+
+---
 
 ## Prerequisites
 
-Install locally:
 - [`gcloud` CLI](https://cloud.google.com/sdk/docs/install) — authenticated with an account that can create GCP projects
 - [`gh` CLI](https://cli.github.com/) — authenticated to this GitHub repo
 - [`terraform`](https://developer.hashicorp.com/terraform/install) >= 1.0
@@ -15,14 +22,14 @@ Install locally:
 
 ## Quick Start
 
-### 1. Clone the repo
+### 1. Clone
 
 ```bash
 git clone https://github.com/krisrowe/minimal-cicd-sample.git
 cd minimal-cicd-sample
 ```
 
-### 2. Initialize GCP infrastructure (local, one-time)
+### 2. Initialize GCP (one-time, local only)
 
 ```bash
 python3 scripts/init.py [project-id] [--billing-account BILLING_ID] [--github-repo OWNER/REPO]
@@ -30,99 +37,74 @@ python3 scripts/init.py [project-id] [--billing-account BILLING_ID] [--github-re
 
 **Project ID resolution** (in order):
 1. CLI positional argument
-2. Auto-generated: `min-cicd-sample-<random>`
+2. Existing `sa-key.json` (idempotent re-run — no flags needed)
+3. Auto-generated: `min-cicd-sample-<random>`
 
-**`--billing-account` is required when creating a new project.** Find yours with:
+**`--billing-account` is required when creating a new project:**
 ```bash
-gcloud billing accounts list
-```
-
-**Example (new project):**
-```bash
+gcloud billing accounts list   # find your billing account ID
 python3 scripts/init.py --billing-account 010217-XXXXXX-XXXXXX
 ```
 
-**Example (existing project, re-run):**
+**Re-run (existing project):**
 ```bash
-python3 scripts/init.py my-project-id
+python3 scripts/init.py
 ```
 
 This script (all steps idempotent):
 1. Creates the GCP project
 2. Links billing account
-3. Enables required APIs (`iamcredentials`, `compute`, `apigee`)
-4. Creates a `deployer` service account with Owner role
-5. Creates a Workload Identity Pool + GitHub OIDC Provider
-6. Grants the SA impersonation rights to the GitHub repo
-7. Pushes `WIF_PROVIDER`, `WIF_SA_EMAIL`, `GCP_PROJECT_ID` to GitHub Actions secrets via `gh`
+3. Resets SA key creation org policy at project level (best-effort)
+4. Enables required APIs (`cloudresourcemanager`, `compute`, `apigee`, etc.)
+5. Creates a `deployer` service account with Owner role
+6. Exports SA key → `sa-key.json` (**gitignored — never committed**)
+7. Pushes `GCP_SA_KEY` and `GCP_PROJECT_ID` to GitHub Actions secrets via `gh`
 
-> **No SA JSON key is created.** GitHub Actions authenticates via OIDC tokens (keyless).
+> If SA key creation is blocked by org policy and the reset fails, `init.py` automatically falls back to setting up **Workload Identity Federation** (keyless OIDC) instead.
 
-### 3. Authenticate locally (one-time)
-
-```bash
-gcloud auth application-default login
-export GCP_PROJECT_ID=<your-project-id>
-```
-
-### 4. Run locally
+### 3. Run locally
 
 ```bash
 python3 scripts/deploy.py
 ```
 
-Runs (using your local ADC credentials):
-- `gcloud projects describe` — validates GCP access
-- `terraform init` + `plan` (plan-only — no infrastructure changes)
-- `helm template` (dry-run, no cluster needed)
-- `scripts/check.py` (structural checks + optional Apigee API probe)
+Credential resolution (auto-detected):
+| Context | Source |
+|---|---|
+| Local (key file) | `sa-key.json` → `GOOGLE_APPLICATION_CREDENTIALS` |
+| Local (WIF/ADC) | `GCP_SA_EMAIL` env var → SA impersonation |
+| CI (key file) | `GCP_SA_KEY` env var (JSON string) |
+| CI (WIF) | Ambient credentials from `google-github-actions/auth` |
 
-### 5. Push and trigger CI
+### 4. Push to trigger CI
 
 ```bash
-git add .
-git commit -m "initial"
 git push origin main
 ```
 
-GitHub Actions runs `.github/workflows/verify.yml` automatically using the WIF secrets set in step 2.
-
----
-
-## How It Works
-
-### Authentication
-
-| Context | Method |
-|---|---|
-| Local | Application Default Credentials (`gcloud auth application-default login`) |
-| GitHub Actions | Workload Identity Federation (OIDC, keyless) |
-
-### No SA JSON Keys
-
-Authentication uses Workload Identity Federation — GitHub Actions presents a short-lived OIDC token that GCP exchanges for temporary credentials. No long-lived keys are stored anywhere.
-
-### No Apigee Org Required
-
-`check.py` probes the Apigee API but **skips gracefully** (no failure) if no org exists.
-
-### No Kubernetes Cluster Required
-
-Helm uses `helm lint` and `helm template` — client-side only, no cluster connection needed.
+GitHub Actions runs `.github/workflows/verify.yml` using the secrets set in step 2.
 
 ---
 
 ## Repository Structure
 
 ```
-terraform/          Terraform config (google provider, validates project access)
-helm/               Helm chart (lint + template only)
+terraform/          Terraform config (google provider, reads project metadata)
+helm/               Helm chart (lint + template only — no cluster needed)
 scripts/
-  init.py           LOCAL ONLY: GCP setup + WIF + GitHub secret push
+  init.py           LOCAL ONLY: GCP project setup + GitHub secret push
   deploy.py         Local + CI: GCP validation, Terraform plan, Helm, checks
-  check.py          Structural checks + optional Apigee API probe
+  check.py          Structural checks + optional Apigee API probe (graceful skip)
 .github/
   workflows/
-    verify.yml      GitHub Actions pipeline (WIF auth)
-.gitignore          Excludes Terraform cache; no SA key to worry about
+    verify.yml      GitHub Actions pipeline
+.gitignore          Excludes sa-key.json and Terraform cache
+sa-key.json         SA credentials — gitignored, local only
 ```
+
+## Notes
+
+- No Apigee org required — `check.py` skips the Apigee probe gracefully on 403/404
+- No Kubernetes cluster required — Helm runs client-side only (`helm template`)
+- Terraform runs `plan` only — no infrastructure is created or modified
+- `sa-key.json` is gitignored and never committed
