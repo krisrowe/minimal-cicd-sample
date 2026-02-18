@@ -1,0 +1,6 @@
+apiVersion: v2
+name: minimal-helm-demo
+description: A minimal Helm chart for CI/CD verification
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

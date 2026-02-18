@@ -1,0 +1,41 @@
+# Sensitive credentials - NEVER commit
+sa-key.json
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Logs & archives
+*.log
+**/*.log
+*.zip
+**/*.zip
+
+# --- Terraform Exclusions ---
+
+# Local provider cache and binary plugins (large, machine-specific)
+.terraform/
+
+# State files
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# --- Terraform Tracking (EXPLICITLY INCLUDED) ---
+# Track lock file for reproducible provider versions
+!.terraform.lock.hcl
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Misc
+.tmp/
+temp/
+*.bak
+*.tmp

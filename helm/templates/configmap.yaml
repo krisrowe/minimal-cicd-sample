@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-verify
+data:
+  status: "Helm verified"
+  timestamp: {{ now | quote }}
